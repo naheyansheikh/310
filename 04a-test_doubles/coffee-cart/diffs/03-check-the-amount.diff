@@ -1,0 +1,55 @@
+commit a1066c44ee8be2a9180f23a2adf1117d6f8fa52d
+Author: b <a@b>
+Date:   Tue Oct 6 10:25:00 2026 -0700
+
+    Check what buyCoffee asked the bank to charge
+    
+    The doubles let a test choose what the bank says, but not see what
+    buyCoffee() asked it to charge. Change buyCoffee() to call getPrice()
+    without passing the modification, and every test still passes:
+    ApprovingReader and DecliningReader ignore the amount, and getPrice()'s own tests
+    don't notice that buyCoffee() stopped calling it.
+    
+    Returning the amount from buyCoffee() wouldn't help. buyCoffee() could
+    return 500 and still ask the bank for 450. What matters is what actually
+    reached the card reader, and only something standing in for the reader
+    can see that.
+    
+    Adds RecordingReader, a double that remembers every amount it's asked
+    to charge, and approves. The new test hands one to buyCoffee(), then
+    checks what it remembered.
+
+diff --git a/test/cart.spec.ts b/test/cart.spec.ts
+index 20d1778..b908203 100644
+--- a/test/cart.spec.ts
++++ b/test/cart.spec.ts
+@@ -15,6 +15,16 @@ class DecliningReader implements IReader {
+ 	}
+ }
+ 
++// remembers every amount it's asked to charge, and approves
++class RecordingReader implements IReader {
++	public charged: number[] = [];
++
++	public charge(cents: number): boolean {
++		this.charged.push(cents);
++		return true;        
++	}
++}
++
+ describe("getPrice", () => {
+ 	it("adds $1 for decaf", () => {
+ 		expect(getPrice("decaf")).to.equal(550);
+@@ -37,4 +47,12 @@ describe("buyCoffee", () => {
+ 	it("refuses when the card is declined", () => {
+ 		expect(buyCoffee(new DecliningReader(), "decaf")).to.equal("card declined");
+ 	});
++
++	it("charges the price with the modification", () => {
++		const reader = new RecordingReader();
++
++		buyCoffee(reader, "iced");
++
++		expect(reader.charged).to.deep.equal([500]);
++	});
+ });

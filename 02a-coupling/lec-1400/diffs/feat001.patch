@@ -1,0 +1,179 @@
+commit 522372c037bfa2f3d91b671a751cc0f998b511c8
+Author: x <a@b>
+Date:   Fri Aug 21 11:32:50 2026 -0700
+
+    New fee policy: resident seniors free for Aquatics and Fitness, non-resident surcharge 25% to 30%
+
+diff --git a/src/brochure.ts b/src/brochure.ts
+index d8b9398..bd17c96 100644
+--- a/src/brochure.ts
++++ b/src/brochure.ts
+@@ -16,8 +16,10 @@ export function render(season: string): string {
+ 
+ 		for (const offering of offerings) {
+ 			// the price we print in the brochure is the resident price, with tax,
+-			// rounded to the nearest dollar so the columns line up
++			// rounded to the nearest dollar so the columns line up. we have no
++			// reader here, so the senior exemption gets a footnote, not a number.
+ 			const price = Math.round(offering.fee * 1.05);
++			const freeForSeniors = ["Aquatics", "Fitness"].includes(program.category);
+ 
+ 			const centre = findCentre(offering.centreId);
+ 			let where = "?";
+@@ -29,7 +31,7 @@ export function render(season: string): string {
+ 				"  " +
+ 					pad(offering.id, 10) +
+ 					pad("with " + offering.instructor.name, 24) +
+-					pad("$" + price, 8) +
++					pad("$" + price + (freeForSeniors ? "*" : ""), 8) +
+ 					pad(where, 56) +
+ 					spacesLabel(offering)
+ 			);
+@@ -37,5 +39,7 @@ export function render(season: string): string {
+ 		lines.push("");
+ 	}
+ 
++	lines.push("* free for residents aged 65 and over.");
++
+ 	return lines.join("\n");
+ }
+diff --git a/src/invoice.ts b/src/invoice.ts
+index d9af0c0..bc11f83 100644
+--- a/src/invoice.ts
++++ b/src/invoice.ts
+@@ -8,8 +8,15 @@ import { pad, title } from "./parkboard";
+  */
+ 
+ export function priceFor(offering: Offering, customer: Customer): number {
++	if (
++		customer.resident &&
++		customer.isSeniorIn(offering.year) &&
++		["Aquatics", "Fitness"].includes(offering.program.category)
++	) {
++		return 0;
++	}
+ 	let amount = offering.fee;
+-	if (!customer.resident) amount = amount * 1.25;
++	if (!customer.resident) amount = amount * 1.3;
+ 	if (customer.isSeniorIn(offering.year) || customer.isYouthIn(offering.year)) amount = amount * 0.7;
+ 	amount = amount * 1.05;
+ 	return Math.round(amount * 100) / 100;
+@@ -31,7 +38,7 @@ export function render(offering: Offering, customer: Customer): string {
+ 		pad("Base fee", 14) + "$" + offering.fee.toFixed(2),
+ 	];
+ 
+-	if (!customer.resident) lines.push(pad("Non-resident", 14) + "+25%");
++	if (!customer.resident) lines.push(pad("Non-resident", 14) + "+30%");
+ 	if (customer.isSeniorIn(offering.year) || customer.isYouthIn(offering.year)) {
+ 		lines.push(pad("Concession", 14) + "-30%");
+ 	}
+diff --git a/src/main.ts b/src/main.ts
+index fcb6fb4..a0e5541 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -5,7 +5,8 @@ import * as invoice from "./invoice";
+ 
+ const USAGE = `parkboard — City of Westbrook Parks & Recreation
+ 
+-  search <field> <is|gt|lt> <value>   fields: id, instructor, season, year, fee,
++  search <field> <is|gt|lt> <value> [resident|visitor] [age]
++                                      fields: id, instructor, season, year, fee,
+                                               capacity, enrolled, title, category, code
+   brochure <Fall|Winter|Spring>       the seasonal brochure
+   invoice <offeringId> <customerId>   what this customer pays
+@@ -18,7 +19,10 @@ export function run(argv: string[]): string {
+ 
+ 	if (command === "search") {
+ 		if (argv.length < 4) return USAGE;
+-		return search(argv[1], argv[2], argv[3], { resident: argv[4] !== "visitor" }).join("\n");
++		return search(argv[1], argv[2], argv[3], {
++			resident: argv[4] !== "visitor",
++			age: argv[5] === undefined ? 40 : Number(argv[5]),
++		}).join("\n");
+ 	}
+ 	if (command === "brochure") {
+ 		return brochure.render(argv[1] === undefined ? "Fall" : argv[1]);
+diff --git a/src/parkboard.ts b/src/parkboard.ts
+index 472c8b4..697fc33 100644
+--- a/src/parkboard.ts
++++ b/src/parkboard.ts
+@@ -21,6 +21,7 @@ const SEARCHABLE_FIELDS = [
+ 
+ export type SearchOptions = {
+ 	resident: boolean;
++	age: number;
+ };
+ 
+ export function allOfferings(): Offering[] {
+@@ -50,8 +51,12 @@ export function search(field: string, op: string, value: string, options: Search
+ 	for (const offering of matched) {
+ 		// what this offering costs the person running the search
+ 		let price = offering.fee;
+-		if (!options.resident) price = price * 1.25;
+-		price = Math.round(price * 1.05 * 100) / 100;
++		if (options.resident && options.age >= 65 && ["Aquatics", "Fitness"].includes(offering.program.category)) {
++			price = 0;
++		} else {
++			if (!options.resident) price = price * 1.3;
++			price = Math.round(price * 1.05 * 100) / 100;
++		}
+ 
+ 		const centre = findCentre(offering.centreId);
+ 		rows.push(
+diff --git a/test/parkboard.spec.ts b/test/parkboard.spec.ts
+index cd30a81..46481db 100644
+--- a/test/parkboard.spec.ts
++++ b/test/parkboard.spec.ts
+@@ -135,27 +135,27 @@ describe("offerings", () => {
+ 
+ describe("search", () => {
+ 	it("Test 27: finds offerings by category", () => {
+-		expect(search("category", "is", "Aquatics", { resident: true })).to.have.length(3);
++		expect(search("category", "is", "Aquatics", { resident: true, age: 40 })).to.have.length(3);
+ 	});
+ 
+ 	it("Test 28: finds offerings by instructor", () => {
+-		expect(search("instructor", "is", "Toni Morrison", { resident: true })).to.have.length(3);
++		expect(search("instructor", "is", "Toni Morrison", { resident: true, age: 40 })).to.have.length(3);
+ 	});
+ 
+ 	it("Test 29: compares numerically with gt", () => {
+-		expect(search("fee", "gt", "150", { resident: true })).to.have.length(2);
++		expect(search("fee", "gt", "150", { resident: true, age: 40 })).to.have.length(2);
+ 	});
+ 
+ 	it("Test 30: compares numerically with lt", () => {
+-		expect(search("fee", "lt", "100", { resident: true })).to.have.length(6);
++		expect(search("fee", "lt", "100", { resident: true, age: 40 })).to.have.length(6);
+ 	});
+ 
+ 	it("Test 31: rejects an unknown field", () => {
+-		expect(search("postcode", "is", "V6K", { resident: true })[0]).to.contain("unknown field");
++		expect(search("postcode", "is", "V6K", { resident: true, age: 40 })[0]).to.contain("unknown field");
+ 	});
+ 
+ 	it("Test 32: returns nothing when nothing matches", () => {
+-		expect(search("category", "is", "Curling", { resident: true })).to.have.length(0);
++		expect(search("category", "is", "Curling", { resident: true, age: 40 })).to.have.length(0);
+ 	});
+ 
+ 	it("Test 33: pads a column", () => {
+@@ -169,11 +169,15 @@ describe("invoice", () => {
+ 	});
+ 
+ 	it("Test 35: adds the non-resident surcharge", () => {
+-		expect(priceFor(offering("FT-110-A"), customer("c10"))).to.equal(144.38);
++		expect(priceFor(offering("FT-110-A"), customer("c10"))).to.equal(150.15);
+ 	});
+ 
+-	it("Test 36: applies the concession to seniors", () => {
+-		expect(priceFor(offering("FT-110-A"), customer("c01"))).to.equal(80.85);
++	it("Test 36: exempts resident seniors in eligible categories", () => {
++		expect(priceFor(offering("FT-110-A"), customer("c01"))).to.equal(0);
++	});
++
++	it("Test 36b: still charges resident seniors in other categories", () => {
++		expect(priceFor(offering("AR-105-A"), customer("c01"))).to.equal(158.03);
+ 	});
+ 
+ 	it("Test 37: applies the concession to youth", () => {
